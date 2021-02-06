@@ -192,11 +192,11 @@ $(BUILD_DIR):
 
 
 OPENOCD ?= openocd
-OCDIFACE ?= interface/stlink.cfg
+OCDIFACE ?= interface/jlink.cfg
 
 flash: $(BUILD_DIR)/$(TARGET).bin
 	dd if=$(BUILD_DIR)/$(TARGET).bin of=$(BUILD_DIR)/$(TARGET)_flash.bin bs=1024 count=128
-	$(OPENOCD) -f $(OCDIFACE) -c "transport select hla_swd" -f "target/stm32h7x.cfg" -c "reset_config none; program $(BUILD_DIR)/$(TARGET)_flash.bin 0x08000000 verify reset exit"
+	$(OPENOCD) -f $(OCDIFACE) -c "transport select swd" -f "target/stm32h7x.cfg" -c "reset_config none; program $(BUILD_DIR)/$(TARGET)_flash.bin 0x08000000 verify reset exit"
 
 .PHONY: flash
 

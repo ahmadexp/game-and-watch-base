@@ -52,6 +52,15 @@ DMA_HandleTypeDef hdma_sai1_a;
 
 SPI_HandleTypeDef hspi2;
 
+#define PI 22/(float)7
+
+const int zOff = 120;
+const int xOff = 00;
+const int yOff = 0;
+const int cSize = 30;
+const int view_plane = 64;
+const float angle = PI/60;
+
 /* USER CODE BEGIN PV */
 
 uint16_t audiobuffer[48000] __attribute__((section (".audio")));
@@ -67,6 +76,44 @@ static void MX_SPI2_Init(void);
 static void MX_OCTOSPI1_Init(void);
 static void MX_SAI1_Init(void);
 static void MX_NVIC_Init(void);
+static void draw_line(uint16_t, uint16_t, uint16_t, uint16_t, uint32_t);
+static void draw_pixel(uint16_t, uint16_t, uint32_t);
+static void raster_circle(uint16_t, uint16_t, uint16_t, uint32_t);
+static void ellipse(uint16_t , uint16_t , uint16_t , uint16_t , uint32_t);
+static void draw_cube(uint32_t color);
+static void zrotate(float q);
+static void yrotate(float q);
+static void xrotate(float q);
+static void print_cube(uint32_t color);
+
+
+
+float cube3d[8][3] = {
+      {xOff - cSize,yOff + cSize,zOff - cSize},
+      {xOff + cSize,yOff + cSize,zOff - cSize},
+      {xOff - cSize,yOff - cSize,zOff - cSize},
+      {xOff + cSize,yOff - cSize,zOff - cSize},
+      {xOff - cSize,yOff + cSize,zOff + cSize},
+      {xOff + cSize,yOff + cSize,zOff + cSize},
+      {xOff - cSize,yOff - cSize,zOff + cSize},
+      {xOff + cSize,yOff - cSize,zOff + cSize}
+    };
+uint8_t cube2d[8][2];
+
+
+
+
+
+
+
+/*
+static void matrixmult(int A[4][8], float R[4][4]);
+static void rotMatAboutX(float Rx[4][4], float);
+static void rotMatAboutY(float Ry[4][4], float);
+static void rotMatAboutZ(float Rz[4][4], float);
+static void sideView(int A[4][8], uint32_t color);*/
+
+
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -80,6 +127,8 @@ static void MX_NVIC_Init(void);
   * @brief  The application entry point.
   * @retval int
   */
+
+
 int main(void)
 {
   /* USER CODE BEGIN 1 */
@@ -128,14 +177,19 @@ int main(void)
     Error_Handler();
   }
 
-  uint16_t color = 0x0000;
+  uint32_t color = 0x0000;
   uint32_t i = 0;
 
   // Create a continuous square wave and loop it using DMA in circular mode
+  /*
   for (uint32_t i = 0; i < sizeof(audiobuffer) / sizeof(audiobuffer[0]); i++) {
     audiobuffer[i] = (i % (48000 / 500)) > 48 ? 200 : -200;
   }
   HAL_SAI_Transmit_DMA(&hsai_BlockA1, audiobuffer, sizeof(audiobuffer) / sizeof(audiobuffer[0]));
+  */
+
+  uint16_t x = 160,y = 120;
+  float yaw = 0, pitch = 0, roll = 0;
 
   while (1)
   {
@@ -145,19 +199,45 @@ int main(void)
 
     uint32_t buttons = buttons_get();
     if(buttons & B_Left) {
-      color = 0xf000;
+      roll+=0.02;
+      if(roll>2*PI) roll-=2*PI;
     }
     if(buttons & B_Right) {
-      color = 0x0f00;
+      roll-=0.02;
+      if(roll<0) roll+=2*PI;
     }
     if(buttons & B_Up) {
-      color = 0x00f0;
+      pitch+=0.02;
+      if(pitch>2*PI) pitch-=2*PI;
     }
     if(buttons & B_Down) {
+      pitch-=0.02;
+      if(pitch<0) pitch+=2*PI;
+    }
+    if(buttons & B_B) {
+       yaw+=0.02;
+      if(yaw>2*PI) yaw-=2*PI;
+    }
+    if(buttons & B_A) {
+       yaw-=0.02;
+      if(yaw<0) yaw+=2*PI;
+    }
+    if(buttons & B_GAME) {
       
-      color = *ptr&0xff;
+      color = 0x333333;
+    }
+    if(buttons & B_TIME) {
+      
+      color = 0x555555;
+      lcd_backlight_on();
+    }
+    if(buttons & B_PAUSE) {
+      
+      color = 0x777777;
+      lcd_backlight_off();
     }
     
+    /*
     for(int x=0; x < 320; x++) {
       for(int y=0; y < 240; y++) {
         // framebuffer[(y*320)+x] = i;
@@ -171,8 +251,97 @@ int main(void)
       }
       // i++;
     }
+    */
+
+    //framebuffer[(120*320)+160] = color;
+
+   //draw_line(100+x,100+y,120+x,120+y, color);
+   //raster_circle(x, y, 10, color);
+   // ellipse(x, y, 10, 10, color);
+
+    /*
+
+    uint16_t ax=160 + 70 * sin(yaw), ay=70 + 20 * cos(yaw);
+    uint16_t bx=160 + 70 * sin(yaw+1.57), by=70 + 20 * cos(yaw+1.57);
+    uint16_t cx=160 + 70 * sin(yaw+3.14), cy=70 + 20 * cos(yaw+3.14);
+    uint16_t dx=160 + 70 * sin(yaw+4.71), dy=70 + 20 * cos(yaw+4.71);
+
+    uint16_t ex=160 + 70 * sin(yaw), ey=170 + 20 * cos(yaw);
+    uint16_t fx=160 + 70 * sin(yaw+1.57), fy=170 + 20 * cos(yaw+1.57);
+    uint16_t gx=160 + 70 * sin(yaw+3.14), gy=170 + 20 * cos(yaw+3.14);
+    uint16_t hx=160 + 70 * sin(yaw+4.71), hy=170 + 20 * cos(yaw+4.71);
+
+    draw_line(ax, ay, bx, by, color);
+    draw_line(bx, by, cx, cy, color);
+    draw_line(cx, cy, dx, dy, color);
+    draw_line(dx, dy, ax, ay, color);
+
+    draw_line(ex, ey, fx, fy, color);
+    draw_line(fx, fy, gx, gy, color);
+    draw_line(gx, gy, hx, hy, color);
+    draw_line(hx, hy, ex, ey, color);
+
+    draw_line(ex, ey, ax, ay, color);
+    draw_line(fx, fy, bx, by, color);
+    draw_line(gx, gy, cx, cy, color);
+    draw_line(hx, hy, dx, dy, color);
+
+    */
+/*
+
+int A[4][8]=
+    {{0, 50, 50, 0, 0, 50, 50, 0},
+    {0, 0, 50, 50, 0, 0, 50, 50},
+    {0, 0, 0, 0, 50, 50, 50, 50},
+    {1, 1, 1 ,1 ,1 ,1, 1, 1}};
+
+
+    rotMatAboutX(A, roll);
+    rotMatAboutY(A, pitch);
+    rotMatAboutZ(A, yaw);
+
+    sideView(A, 0x000000);*/
+
+    cube3d[0][0]=xOff - cSize; cube3d[0][1]=yOff + cSize; cube3d[0][2]=zOff - cSize;
+    cube3d[1][0]=xOff + cSize; cube3d[1][1]=yOff + cSize; cube3d[1][2]=zOff - cSize;
+    cube3d[2][0]=xOff - cSize; cube3d[2][1]=yOff - cSize; cube3d[2][2]=zOff - cSize;
+    cube3d[3][0]=xOff + cSize; cube3d[3][1]=yOff - cSize; cube3d[3][2]=zOff - cSize;
+    cube3d[4][0]=xOff - cSize; cube3d[4][1]=yOff + cSize; cube3d[4][2]=zOff + cSize;
+    cube3d[5][0]=xOff + cSize; cube3d[5][1]=yOff + cSize; cube3d[5][2]=zOff + cSize;
+    cube3d[6][0]=xOff - cSize; cube3d[6][1]=yOff - cSize; cube3d[6][2]=zOff + cSize;
+    cube3d[7][0]=xOff + cSize; cube3d[7][1]=yOff - cSize; cube3d[7][2]=zOff + cSize;
+  
+
+    xrotate(pitch);
+    yrotate(roll);
+    zrotate(yaw);
+
+    print_cube(0x000000);
+
     
     HAL_Delay(20);
+
+    print_cube(0xffffff);
+
+/*
+    draw_line(ax, ay, bx, by, 0xffffff);
+    draw_line(bx, by, cx, cy, 0xffffff);
+    draw_line(cx, cy, dx, dy, 0xffffff);
+    draw_line(dx, dy, ax, ay, 0xffffff);
+
+    draw_line(ex, ey, fx, fy, 0xffffff);
+    draw_line(fx, fy, gx, gy, 0xffffff);
+    draw_line(gx, gy, hx, hy, 0xffffff);
+    draw_line(hx, hy, ex, ey, 0xffffff);
+
+    draw_line(ex, ey, ax, ay, 0xffffff);
+    draw_line(fx, fy, bx, by, 0xffffff);
+    draw_line(gx, gy, cx, cy, 0xffffff);
+    draw_line(hx, hy, dx, dy, 0xffffff);
+
+   */
+
+    //ellipse(x, y, 10, 10, 0xffffff);
     i++;
     // if(i % 30 == 0) {
     //   if(color == 0xf800) {
@@ -197,6 +366,198 @@ int main(void)
 // HAL_Delay(500);
   }
   /* USER CODE END 3 */
+}
+/*
+void sideView(int A[4][8], uint32_t color){
+    int xdisp = 106, ydisp = 120;
+    draw_line(xdisp+A[1][0], ydisp+A[2][0], xdisp+A[1][1], ydisp+A[2][1], color);
+    draw_line(xdisp+A[1][1], ydisp+A[2][1], xdisp+A[1][2], ydisp+A[2][2], color);
+    draw_line(xdisp+A[1][2], ydisp+A[2][2], xdisp+A[1][3], ydisp+A[2][3], color);
+    draw_line(xdisp+A[1][3], ydisp+A[2][3], xdisp+A[1][0], ydisp+A[2][0], color);
+    draw_line(xdisp+A[1][4], ydisp+A[2][4], xdisp+A[1][5], ydisp+A[2][5], color);
+    draw_line(xdisp+A[1][5], ydisp+A[2][5], xdisp+A[1][6], ydisp+A[2][6], color);
+    draw_line(xdisp+A[1][6], ydisp+A[2][6], xdisp+A[1][7], ydisp+A[2][7], color);
+    draw_line(xdisp+A[1][7], ydisp+A[2][7], xdisp+A[1][4], ydisp+A[2][4], color);
+    draw_line(xdisp+A[1][0], ydisp+A[2][0], xdisp+A[1][4], ydisp+A[2][4], color);
+    draw_line(xdisp+A[1][1], ydisp+A[2][1], xdisp+A[1][5], ydisp+A[2][5], color);
+    draw_line(xdisp+A[1][6], ydisp+A[2][6], xdisp+A[1][2], ydisp+A[2][2], color);
+    draw_line(xdisp+A[1][7], ydisp+A[2][7], xdisp+A[1][3], ydisp+A[2][3], color);
+    draw_line(xdisp+A[1][7], ydisp+A[2][7], xdisp+A[1][3], ydisp+A[2][3], color);
+}
+
+void rotMatAboutX(float Rx[4][4], float x){
+   float  xrad = PI*x/(float)360;
+   float cosx = cos(xrad), sinx = sin(xrad);
+    Rx[1][1]=cosx;
+    Rx[1][2]=-sinx;
+    Rx[2][1]=sinx;
+    Rx[2][2]=cosx;
+}
+
+void rotMatAboutY(float Ry[4][4], float y){
+    float  yrad = PI*y/(float)360;
+    float cosy = cos(yrad), siny = sin(yrad);
+    Ry[0][0]=cosy;
+    Ry[0][2]=siny;
+    Ry[2][0]=-siny;
+    Ry[2][2]=cosy;
+}
+
+void rotMatAboutZ(float Rz[4][4], float z){
+    float  zrad = PI*z/(float)360;
+    float cosz = cos(zrad), sinz = sin(zrad);
+    Rz[0][0]=cosz;
+    Rz[0][1]=-sinz;
+    Rz[1][0]=sinz;
+    Rz[1][1]=cosz;
+}
+
+void matrixmult(int A[4][8], float R[4][4]){
+    float res[4][8];
+    for(int i = 0; i<4; i++){
+        for(int j = 0; j<8; j++){
+            res[i][j] = 0;
+            for(int k = 0; k<4; k++){
+                res[i][j]+=R[i][k]*A[k][j];
+            }
+        }
+    }
+    for(int i = 0; i<4; i++){
+        for(int j = 0; j<8; j++){
+            A[i][j] = res[i][j];
+        }
+    }
+}
+
+*/
+
+void print_cube(uint32_t color) {
+  //calculate 2d points
+  for(uint8_t i = 0; i < 8; i++) {
+    cube2d[i][0] = (unsigned char)((cube3d[i][0] * view_plane / cube3d[i][2]) + (240/2));
+    cube2d[i][1] = (unsigned char)((cube3d[i][1] * view_plane / cube3d[i][2]) + (320/2));
+  }
+
+  draw_cube(color);
+}
+
+void draw_cube(uint32_t color) {
+  draw_line(cube2d[0][0],cube2d[0][1],cube2d[1][0],cube2d[1][1],color);
+  draw_line(cube2d[0][0],cube2d[0][1],cube2d[2][0],cube2d[2][1],color);
+  draw_line(cube2d[0][0],cube2d[0][1],cube2d[4][0],cube2d[4][1],color);
+  draw_line(cube2d[1][0],cube2d[1][1],cube2d[5][0],cube2d[5][1],color);
+  draw_line(cube2d[1][0],cube2d[1][1],cube2d[3][0],cube2d[3][1],color);
+  draw_line(cube2d[2][0],cube2d[2][1],cube2d[6][0],cube2d[6][1],color);
+  draw_line(cube2d[2][0],cube2d[2][1],cube2d[3][0],cube2d[3][1],color);
+  draw_line(cube2d[4][0],cube2d[4][1],cube2d[6][0],cube2d[6][1],color);
+  draw_line(cube2d[4][0],cube2d[4][1],cube2d[5][0],cube2d[5][1],color);
+  draw_line(cube2d[7][0],cube2d[7][1],cube2d[6][0],cube2d[6][1],color);
+  draw_line(cube2d[7][0],cube2d[7][1],cube2d[3][0],cube2d[3][1],color);
+  draw_line(cube2d[7][0],cube2d[7][1],cube2d[5][0],cube2d[5][1],color);
+  //delay(500);
+}
+
+void zrotate(float q) {
+  float tx,ty,temp;
+  for(uint8_t i = 0; i < 8; i++) {
+    tx = cube3d[i][0] - xOff;
+    ty = cube3d[i][1] - yOff;
+    temp = tx * cos(q) - ty * sin(q);
+    ty = tx * sin(q) + ty * cos(q);
+    tx = temp;
+    cube3d[i][0] = tx + xOff;
+    cube3d[i][1] = ty + yOff;
+  }
+}
+
+void yrotate(float q) {
+  float tx,tz,temp;
+  for(uint8_t i = 0; i < 8; i++) {
+    tx = cube3d[i][0] - xOff;
+    tz = cube3d[i][2] - zOff;
+    temp = tz * cos(q) - tx * sin(q);
+    tx = tz * sin(q) + tx * cos(q);
+    tz = temp;
+    cube3d[i][0] = tx + xOff;
+    cube3d[i][2] = tz + zOff;
+  }
+}
+
+void xrotate(float q) {
+  float ty,tz,temp;
+  for(uint8_t i = 0; i < 8; i++) {
+    ty = cube3d[i][1] - yOff;
+    tz = cube3d[i][2] - zOff;
+    temp = ty * cos(q) - tz * sin(q);
+    tz = ty * sin(q) + tz * cos(q);
+    ty = temp;
+    cube3d[i][1] = ty + yOff;
+    cube3d[i][2] = tz + zOff;
+  }
+}
+
+void draw_line(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint32_t color)
+{
+ 
+  int16_t dx = abs(x1-x0), sx = x0<x1 ? 1 : -1;
+  int16_t dy = abs(y1-y0), sy = y0<y1 ? 1 : -1; 
+  int16_t err = (dx>dy ? dx : -dy)/2, e2;
+ 
+  for(;;){
+    framebuffer[(y0*320)+x0] = color;
+    if (x0==x1 && y0==y1) break;
+    e2 = err;
+    if (e2 >-dx) { err -= dy; x0 += sx; }
+    if (e2 < dy) { err += dx; y0 += sy; }
+  }
+ 
+}
+
+void draw_pixel(uint16_t x0, uint16_t y0, uint32_t color)
+{
+  framebuffer[(y0*320)+x0] = color;
+}
+
+void ellipse(uint16_t x0, uint16_t y0, uint16_t r1, uint16_t r2, uint32_t color)
+{
+  float t;
+  for(t=0; t+=0.1; t<6.28)
+    draw_pixel(x0 + (r1 * sin(t)), y0 + (r2 * cos(t)), color);
+}
+
+void raster_circle(uint16_t x0, uint16_t y0, uint16_t radius, uint32_t color)
+{
+    int16_t f = 1 - radius;
+    int16_t ddF_x = 0;
+    int16_t ddF_y = -2 * radius;
+    int16_t x = 0;
+    int16_t y = radius;
+ 
+    draw_pixel(x0, y0 + radius, color);
+    draw_pixel(x0, y0 - radius, color);
+    draw_pixel(x0 + radius, y0, color);
+    draw_pixel(x0 - radius, y0, color);
+ 
+    while(x < y) 
+    {
+        if(f >= 0) 
+        {
+            y--;
+            ddF_y += 2;
+            f += ddF_y;
+        }
+        x++;
+        ddF_x += 2;
+        f += ddF_x + 1;    
+        draw_pixel(x0 + x, y0 + y, color);
+        draw_pixel(x0 - x, y0 + y, color);
+        draw_pixel(x0 + x, y0 - y, color);
+        draw_pixel(x0 - x, y0 - y, color);
+        draw_pixel(x0 + y, y0 + x, color);
+        draw_pixel(x0 - y, y0 + x, color);
+        draw_pixel(x0 + y, y0 - x, color);
+        draw_pixel(x0 - y, y0 - x, color);
+    }
 }
 
 /**
@@ -547,7 +908,8 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIO_Speaker_enable_GPIO_Port, GPIO_Speaker_enable_Pin, GPIO_PIN_SET);
+  //Speaker
+ // HAL_GPIO_WritePin(GPIO_Speaker_enable_GPIO_Port, GPIO_Speaker_enable_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6, GPIO_PIN_SET);
