@@ -52,6 +52,8 @@ DMA_HandleTypeDef hdma_sai1_a;
 
 SPI_HandleTypeDef hspi2;
 
+I2C_HandleTypeDef  hi2c1;
+
 #define PI 22/(float)7
 
 const int zOff = 120;
@@ -61,9 +63,32 @@ const int cSize = 30;
 const int view_plane = 64;
 const float angle = PI/60;
 
+
+/* USER CODE BEGIN Includes */
+#define DEV_ADD          (0x28<<1)
+#define UNIT_SELECT_ADD  0x3B
+#define UNIT_SELECT_DATA 0x68
+#define OPR_MODE_ADD     0x3D
+#define OPR_MODE_DATA    0xFC
+#define EUL_X_ADD        0x1A
+#define EUL_Y_ADD        0x1C
+#define EUL_Z_ADD        0x1E
+#define LIA_X_ADD        0x28
+#define LIA_Y_ADD        0x2A
+#define LIA_Z_ADD        0x2C
+/* USER CODE END Includes */
+
+
 /* USER CODE BEGIN PV */
 
 uint16_t audiobuffer[48000] __attribute__((section (".audio")));
+
+
+char logbuf[1024 * 4] __attribute__((section (".persistent"))) __attribute__((aligned(4)));
+uint32_t log_idx __attribute__((section (".persistent")));
+__attribute__((used)) __attribute__((section (".persistent"))) volatile uint32_t boot_magic;
+
+uint32_t boot_buttons;
 
 /* USER CODE END PV */
 
@@ -74,8 +99,10 @@ static void MX_DMA_Init(void);
 static void MX_LTDC_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_OCTOSPI1_Init(void);
+static void MX_I2C1_Init(void);
 static void MX_SAI1_Init(void);
 static void MX_NVIC_Init(void);
+static void MX_I2C1_Init(void);
 static void draw_line(uint16_t, uint16_t, uint16_t, uint16_t, uint32_t);
 static void draw_pixel(uint16_t, uint16_t, uint32_t);
 static void raster_circle(uint16_t, uint16_t, uint16_t, uint32_t);
@@ -86,6 +113,49 @@ static void yrotate(float q);
 static void xrotate(float q);
 static void print_cube(uint32_t color);
 
+
+unsigned char eul_x_msb = 0, eul_x_lsb = 0, eul_y_msb = 0, eul_y_lsb = 0, eul_z_msb = 0, eul_z_lsb = 0;
+unsigned char lia_x_msb = 0, lia_x_lsb = 0, lia_y_msb = 0, lia_y_lsb = 0, lia_z_msb = 0, lia_z_lsb = 0;
+
+void i2c_init_function(void){
+    unsigned char aRxBuffer[3], txBuffer[3];
+    HAL_I2C_Mem_Read(&hi2c1, DEV_ADD, UNIT_SELECT_ADD, I2C_MEMADD_SIZE_8BIT, aRxBuffer, 1, 100);
+    aRxBuffer[0] = aRxBuffer[0] & UNIT_SELECT_DATA;
+    txBuffer[0] = UNIT_SELECT_ADD;
+    txBuffer[1] = aRxBuffer[0];
+    HAL_I2C_Master_Transmit(&hi2c1, DEV_ADD, txBuffer, 1, 100);
+
+
+    HAL_I2C_Mem_Read(&hi2c1, DEV_ADD, OPR_MODE_ADD, I2C_MEMADD_SIZE_8BIT, aRxBuffer, 1, 100);
+    aRxBuffer[0] = aRxBuffer[0] & OPR_MODE_DATA;
+    txBuffer[0] = OPR_MODE_ADD;
+    txBuffer[1] = aRxBuffer[0];
+    HAL_I2C_Master_Transmit(&hi2c1, DEV_ADD, txBuffer, 1, 100);
+}
+
+void eul_x_read(unsigned char * tab){
+    HAL_I2C_Mem_Read(&hi2c1, DEV_ADD, EUL_X_ADD, I2C_MEMADD_SIZE_8BIT, tab, 2, 100);
+}
+
+void eul_y_read(unsigned char * tab){
+    HAL_I2C_Mem_Read(&hi2c1, DEV_ADD, EUL_Y_ADD, I2C_MEMADD_SIZE_8BIT, tab, 2, 100);
+}
+
+void eul_z_read(unsigned char * tab){
+    HAL_I2C_Mem_Read(&hi2c1, DEV_ADD, EUL_Z_ADD, I2C_MEMADD_SIZE_8BIT, tab, 2, 100);
+}
+
+void lia_x_read(unsigned char * tab){
+    HAL_I2C_Mem_Read(&hi2c1, DEV_ADD, LIA_X_ADD, I2C_MEMADD_SIZE_8BIT, tab, 2, 100);
+}
+
+void lia_y_read(unsigned char * tab){
+    HAL_I2C_Mem_Read(&hi2c1, DEV_ADD, LIA_Y_ADD, I2C_MEMADD_SIZE_8BIT, tab, 2, 100);
+}
+
+void lia_z_read(unsigned char * tab){
+    HAL_I2C_Mem_Read(&hi2c1, DEV_ADD, LIA_Z_ADD, I2C_MEMADD_SIZE_8BIT, tab, 2, 100);
+}
 
 
 float cube3d[8][3] = {
@@ -140,6 +210,10 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
+
+  // Power pin as Input
+  HAL_PWR_DisableWakeUpPin(PWR_WAKEUP_PIN1_LOW);
+
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -156,6 +230,7 @@ int main(void)
   MX_SPI2_Init();
   MX_OCTOSPI1_Init();
   MX_SAI1_Init();
+  MX_I2C1_Init();
 
   /* Initialize interrupts */
   MX_NVIC_Init();
@@ -165,6 +240,8 @@ int main(void)
   memset(framebuffer, 0xff, 320*240*2);
 
   /* USER CODE END 2 */
+
+  i2c_init_function();
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -187,6 +264,8 @@ int main(void)
   }
   HAL_SAI_Transmit_DMA(&hsai_BlockA1, audiobuffer, sizeof(audiobuffer) / sizeof(audiobuffer[0]));
   */
+
+   //bq24072_init();
 
   uint16_t x = 160,y = 120;
   float yaw = 0, pitch = 0, roll = 0;
@@ -236,6 +315,32 @@ int main(void)
       color = 0x777777;
       lcd_backlight_off();
     }
+
+
+//read from IMU
+    unsigned char buff[3];
+
+      eul_x_read(buff);
+  //    HAL_Delay(25);
+      eul_x_lsb = buff[0];
+      eul_x_msb = buff[1];
+
+      roll=((eul_x_msb*256.0)+eul_x_lsb)/16.0;
+
+      eul_y_read(buff);
+  //    HAL_Delay(25);
+      eul_y_lsb = buff[0];
+      eul_y_msb = buff[1];
+
+      pitch=((eul_y_msb*256.0)+eul_y_lsb)/16.0;
+
+      eul_z_read(buff);
+  //    HAL_Delay(25);
+      eul_z_lsb = buff[0];
+      eul_z_msb = buff[1];
+
+      yaw=((eul_z_msb*256.0)+eul_z_lsb)/16.0;
+ //end of read from IMU     
     
     /*
     for(int x=0; x < 320; x++) {
@@ -558,6 +663,81 @@ void raster_circle(uint16_t x0, uint16_t y0, uint16_t radius, uint32_t color)
         draw_pixel(x0 + y, y0 - x, color);
         draw_pixel(x0 - y, y0 - x, color);
     }
+}
+
+void boot_magic_set(uint32_t magic)
+{
+  boot_magic = magic;
+}
+
+uint32_t boot_magic_get(void)
+{
+  return boot_magic;
+}
+
+void GW_EnterDeepSleep(void)
+{
+  // Stop SAI DMA (audio)
+  HAL_SAI_DMAStop(&hsai_BlockA1);
+
+  // Enable wakup by PIN1, the power button
+  HAL_PWR_EnableWakeUpPin(PWR_WAKEUP_PIN1_LOW);
+
+  lcd_backlight_off();
+
+  // Leave a trace in RAM that we entered standby mode
+  boot_magic = BOOT_MAGIC_STANDBY;
+
+  // Delay 500ms to give us a chance to attach a debugger in case
+  // we end up in a suspend-loop.
+  for (int i = 0; i < 10; i++) {
+      wdog_refresh();
+      HAL_Delay(50);
+  }
+  HAL_PWR_EnterSTANDBYMode();
+
+  // Execution stops here, this function will not return
+  while(1) {
+    // If we for some reason survive until here, let's just reboot
+    HAL_NVIC_SystemReset();
+  }
+
+}
+
+// Returns buttons that were pressed at boot
+uint32_t GW_GetBootButtons(void)
+{
+  return boot_buttons;
+}
+
+/* I2C1 init function */
+static void MX_I2C1_Init(void) {
+  GPIO_InitTypeDef GPIO_InitStruct;
+
+  /* Peripheral clock enable */
+  __HAL_RCC_I2C1_CLK_ENABLE();
+
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.Timing = 0x10909CEC;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  HAL_I2C_Init(&hi2c1);
+
+  /**Configure Analog filter
+  */
+  HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE);
+
+  GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 
 /**
@@ -918,10 +1098,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_8|GPIO_PIN_4, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_8, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1|GPIO_PIN_4, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : GPIO_Speaker_enable_Pin */
   GPIO_InitStruct.Pin = GPIO_Speaker_enable_Pin;
@@ -935,6 +1115,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+
+  /*Configure GPIO pin : BTN_PWR_Pin */
+  GPIO_InitStruct.Pin = BTN_PWR_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(BTN_PWR_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PA4 PA5 PA6 */
   GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6;
@@ -964,6 +1151,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
 }
 
