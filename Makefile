@@ -36,6 +36,8 @@ BUILD_DIR = build
 ######################################
 # C sources
 C_SOURCES =  \
+Core/Src/bmi2.c \
+Core/Src/bmi270.c \
 Core/Src/flash.c \
 Core/Src/lcd.c \
 Core/Src/buttons.c \

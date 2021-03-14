@@ -25,6 +25,8 @@
 #include "buttons.h"
 #include "flash.h"
 #include "lcd.h"
+#include "bmi270.h"
+#include "stdbool.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,16 +58,16 @@ I2C_HandleTypeDef  hi2c1;
 
 #define PI 22/(float)7
 
-const int zOff = 120;
-const int xOff = 00;
-const int yOff = 0;
-const int cSize = 30;
-const int view_plane = 64;
+const int zOff = 258 ;
+const int xOff = 36;
+const int yOff = -36;
+const int cSize =32;
+const int view_plane = 258;
 const float angle = PI/60;
 
 
 /* USER CODE BEGIN Includes */
-#define DEV_ADD          (0x28<<1)
+#define DEV_ADD          (0x68<<1)
 #define UNIT_SELECT_ADD  0x3B
 #define UNIT_SELECT_DATA 0x68
 #define OPR_MODE_ADD     0x3D
@@ -77,6 +79,8 @@ const float angle = PI/60;
 #define LIA_Y_ADD        0x2A
 #define LIA_Z_ADD        0x2C
 /* USER CODE END Includes */
+
+#define BUS_TIMEOUT             1000
 
 
 /* USER CODE BEGIN PV */
@@ -102,7 +106,7 @@ static void MX_OCTOSPI1_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SAI1_Init(void);
 static void MX_NVIC_Init(void);
-static void MX_I2C1_Init(void);
+// static void MX_I2C1_Init(void);
 static void draw_line(uint16_t, uint16_t, uint16_t, uint16_t, uint32_t);
 static void draw_pixel(uint16_t, uint16_t, uint32_t);
 static void raster_circle(uint16_t, uint16_t, uint16_t, uint32_t);
@@ -113,24 +117,172 @@ static void yrotate(float q);
 static void xrotate(float q);
 static void print_cube(uint32_t color);
 
+/* Callback function prototypes for the BMI270 Sensor API */
+int8_t bmi2_i2c_read(uint8_t dev_id, uint8_t reg_addr, uint8_t *data, uint16_t len);
+int8_t bmi2_i2c_write(uint8_t dev_id, uint8_t reg_addr, const uint8_t *data, uint16_t len);
+void bmi2_delay_us(uint32_t period);
+
+/* Static variables */
+static struct bmi2_dev bmi2;
+static struct bmi2_dev s_bmi270;
+static uint8_t dev_addr;
+static volatile bool bmi2_intr_recvd = false;
+static volatile uint32_t last_time_us = 0;
+#define READ_WRITE_LEN     UINT8_C(46)
+uint8_t GTXBuffer[2048], GRXBuffer[2048];
+
+
+
 
 unsigned char eul_x_msb = 0, eul_x_lsb = 0, eul_y_msb = 0, eul_y_lsb = 0, eul_z_msb = 0, eul_z_lsb = 0;
 unsigned char lia_x_msb = 0, lia_x_lsb = 0, lia_y_msb = 0, lia_y_lsb = 0, lia_z_msb = 0, lia_z_lsb = 0;
 
-void i2c_init_function(void){
-    unsigned char aRxBuffer[3], txBuffer[3];
-    HAL_I2C_Mem_Read(&hi2c1, DEV_ADD, UNIT_SELECT_ADD, I2C_MEMADD_SIZE_8BIT, aRxBuffer, 1, 100);
-    aRxBuffer[0] = aRxBuffer[0] & UNIT_SELECT_DATA;
-    txBuffer[0] = UNIT_SELECT_ADD;
-    txBuffer[1] = aRxBuffer[0];
-    HAL_I2C_Master_Transmit(&hi2c1, DEV_ADD, txBuffer, 1, 100);
+void HAL_Delay_us(uint32_t Delay_us)
+{
+   uint32_t delay_time;
+   delay_time = (uint32_t)(Delay_us/1000+1);
+   HAL_Delay(delay_time);
+}
+
+static int8_t set_gyro_config(struct bmi2_dev *dev)
+{
+    /* Status of api are returned to this variable. */
+    int8_t rslt;
+
+    /* Structure to define the type of sensor and its configurations. */
+    struct bmi2_sens_config config;
+
+    /* Configure the type of feature. */
+    config.type = BMI2_GYRO;
+
+    /* Get default configurations for the type of feature selected. */
+    rslt = bmi270_get_sensor_config(&config, 1, dev);
+
+    /* Map data ready interrupt to interrupt pin. */
+    // rslt = bmi2_map_data_int(BMI2_DRDY_INT, BMI2_INT2, dev);
+
+    if (rslt == BMI2_OK)
+    {
+        /* The user can change the following configuration parameters according to their requirement. */
+        /* Set Output Data Rate */
+        config.cfg.gyr.odr = BMI2_GYR_ODR_100HZ;
+
+        /* Gyroscope Angular Rate Measurement Range.By default the range is 2000dps. */
+        config.cfg.gyr.range = BMI2_GYR_RANGE_2000;
+
+        /* Gyroscope bandwidth parameters. By default the gyro bandwidth is in normal mode. */
+        config.cfg.gyr.bwp = BMI2_GYR_NORMAL_MODE;
+
+        /* Enable/Disable the noise performance mode for precision yaw rate sensing
+         * There are two modes
+         *  0 -> Ultra low power mode(Default)
+         *  1 -> High performance mode
+         */
+        config.cfg.gyr.noise_perf = BMI2_POWER_OPT_MODE;
+
+        /* Enable/Disable the filter performance mode where averaging of samples
+         * will be done based on above set bandwidth and ODR.
+         * There are two modes
+         *  0 -> Ultra low power mode
+         *  1 -> High performance mode(Default)
+         */
+        config.cfg.gyr.filter_perf = BMI2_PERF_OPT_MODE;
+
+        /* Set the gyro configurations. */
+        rslt = bmi270_set_sensor_config(&config, 1, dev);
+    }
+    else{
+      lcd_backlight_off();
+      while(1){};
+    }
+
+    return rslt;
+}
 
 
-    HAL_I2C_Mem_Read(&hi2c1, DEV_ADD, OPR_MODE_ADD, I2C_MEMADD_SIZE_8BIT, aRxBuffer, 1, 100);
-    aRxBuffer[0] = aRxBuffer[0] & OPR_MODE_DATA;
-    txBuffer[0] = OPR_MODE_ADD;
-    txBuffer[1] = aRxBuffer[0];
-    HAL_I2C_Master_Transmit(&hi2c1, DEV_ADD, txBuffer, 1, 100);
+void BMI270_MODULE_INIT(void)
+{
+    int8_t rslt;
+    /* Create an instance of sensor data structure. */
+    struct bmi2_sensor_data sensor_data = { 0 };
+
+    /* Assign gyro sensor to variable. */
+    uint8_t sens_list = BMI2_GYRO;
+
+    /* Initialize the interrupt status of gyro. */
+    uint16_t int_status = 0;
+    bmi2_interface_init(&s_bmi270);
+    rslt = bmi270_init(&s_bmi270);
+    if(rslt != BMI2_OK){
+      //lcd_backlight_off();
+      //while(1){};
+    }
+    bmi270_sensor_enable(&sens_list, 1, &s_bmi270);
+    set_gyro_config(&s_bmi270);
+
+}
+
+
+int8_t SensorAPI_I2Cx_Read(uint8_t slave_address7, uint8_t subaddress, uint8_t *pBuffer, uint16_t ReadNumbr)
+{
+    uint16_t DevAddress = slave_address7;// << 1;
+#if 0//def SUPPORT_STM32_L475VGTX
+   subaddress = subaddress + 2;
+#endif
+//   PDEBUG("DevAddress0 =0x%x reg_addr=0x%x\n",DevAddress,subaddress);
+             
+   // send register address
+    HAL_I2C_Master_Transmit(&hi2c1, DevAddress, &subaddress, 0, BUS_TIMEOUT);
+    HAL_I2C_Master_Receive(&hi2c1, DevAddress, pBuffer, ReadNumbr, BUS_TIMEOUT);
+    return 0;
+}
+
+int8_t SensorAPI_I2Cx_Write(uint8_t slave_address7, uint8_t subaddress, uint8_t *pBuffer, uint16_t WriteNumbr)
+{
+    uint16_t DevAddress = slave_address7;// << 1;
+#if 0//def SUPPORT_STM32_L475VGTX
+   subaddress = subaddress + 2;
+#endif
+//   PDEBUG("DevAddress1 =0x%x reg_addr=0x%x\n",DevAddress,subaddress);
+
+    GTXBuffer[0] = subaddress;
+    memcpy(&GTXBuffer[1], pBuffer, WriteNumbr);
+
+    // send register address
+    HAL_I2C_Master_Transmit(&hi2c1, DevAddress, GTXBuffer, WriteNumbr+1, BUS_TIMEOUT);
+    return 0;
+}
+
+void bmi2_interface_init(struct bmi2_dev *bmi)
+{
+
+    if (bmi != NULL)
+    {
+        /* To initialize the user I2C function */
+        dev_addr = BMI2_I2C_PRIM_ADDR;
+        //dev_addr = 0x68<<1;
+        bmi->intf = BMI2_I2C_INTF;
+        bmi->read = SensorAPI_I2Cx_Read;
+        bmi->write = SensorAPI_I2Cx_Write;
+        
+
+
+        /* Assign device address to interface pointer */
+        bmi->intf_ptr = &dev_addr;
+
+        /* Configure delay in microseconds */
+        bmi->delay_us = HAL_Delay_us;
+
+        /* Configure max read/write length (in bytes) ( Supported length depends on target machine) */
+        bmi->read_write_len = READ_WRITE_LEN;
+
+        /* Assign to NULL to load the default config file. */
+        bmi->config_file_ptr = NULL;
+    } else {
+      lcd_backlight_off();
+    }
+
+
 }
 
 void eul_x_read(unsigned char * tab){
@@ -199,6 +351,18 @@ static void sideView(int A[4][8], uint32_t color);*/
   */
 
 
+/*!
+ * @brief This function converts lsb to degree per second for 16 bit gyro at
+ * range 125, 250, 500, 1000 or 2000dps.
+ */
+static float lsb_to_dps(int16_t val, float dps, uint8_t bit_width)
+{
+    float half_scale = ((float)(1 << bit_width) / 2.0f);
+
+    return (dps / ((half_scale) + BMI2_GYR_RANGE_2000)) * (val);
+}
+
+
 int main(void)
 {
   /* USER CODE BEGIN 1 */
@@ -241,7 +405,7 @@ int main(void)
 
   /* USER CODE END 2 */
 
-  i2c_init_function();
+  BMI270_MODULE_INIT();
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -270,11 +434,24 @@ int main(void)
   uint16_t x = 160,y = 120;
   float yaw = 0, pitch = 0, roll = 0;
 
+  struct bmi2_sensor_data sensor_data = { 0 };
+
+
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+    // draw_line(0, 100, 0, 100, 1);
+
+    bmi270_get_sensor_data(&sensor_data, 1, &s_bmi270);
+    float x = 0;
+
+    x = lsb_to_dps(sensor_data.sens_data.gyr.x, 2000, s_bmi270.resolution);
+   // pitch=sensor_data.sens_data.gyr.x;
+   // roll=sensor_data.sens_data.gyr.y;
+    yaw=sensor_data.sens_data.gyr.z;
 
     uint32_t buttons = buttons_get();
     if(buttons & B_Left) {
@@ -318,6 +495,7 @@ int main(void)
 
 
 //read from IMU
+    /*
     unsigned char buff[3];
 
       eul_x_read(buff);
@@ -341,7 +519,7 @@ int main(void)
 
       yaw=((eul_z_msb*256.0)+eul_z_lsb)/16.0;
  //end of read from IMU     
-    
+    */
     /*
     for(int x=0; x < 320; x++) {
       for(int y=0; y < 240; y++) {
@@ -712,11 +890,12 @@ uint32_t GW_GetBootButtons(void)
 
 /* I2C1 init function */
 static void MX_I2C1_Init(void) {
-  GPIO_InitTypeDef GPIO_InitStruct;
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* Peripheral clock enable */
   __HAL_RCC_I2C1_CLK_ENABLE();
 
+/*
   hi2c1.Instance = I2C1;
   hi2c1.Init.Timing = 0x10909CEC;
   hi2c1.Init.OwnAddress1 = 0;
@@ -727,17 +906,29 @@ static void MX_I2C1_Init(void) {
   hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
   HAL_I2C_Init(&hi2c1);
+  */
 
   /**Configure Analog filter
   */
-  HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE);
-
-  GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
+  //HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE);
+  
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  /**I2C1 GPIO Configuration    
+  PB6     ------> I2C1_SCL
+  PB7     ------> I2C1_SDA 
+  */
+  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct); 
+/*
+  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  */
 }
 
 /**
